@@ -1,16 +1,4 @@
-﻿// Copyright 2016 Serilog Contributors
-// 
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-// 
-//     http://www.apache.org/licenses/LICENSE-2.0
-// 
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+﻿#region
 
 using System;
 using System.Collections.Generic;
@@ -20,48 +8,47 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
 using Serilog.Core;
 using Serilog.Debugging;
 using Serilog.Events;
-using Serilog.Sinks.Batch;
-using Serilog.Sinks.Extensions;
+using Serilog.Sinks.SQLite.Sinks.Batch;
+using Serilog.Sinks.SQLite.Sinks.Extensions;
 
-namespace Serilog.Sinks.SQLite
+// ReSharper disable InconsistentNaming
+// ReSharper disable NotAccessedField.Local
+
+#endregion
+
+namespace Serilog.Sinks.SQLite.Sinks.SQLite
 {
     internal class SQLiteSink : BatchProvider, ILogEventSink
     {
-        private readonly string _databasePath;
-        private readonly IFormatProvider _formatProvider;
-        private readonly bool _storeTimestampInUtc;
-        private readonly uint _maxDatabaseSize;
-        private readonly bool _rollOver;
-        private readonly string _tableName;
-        private readonly TimeSpan? _retentionPeriod;
-        private readonly Timer _retentionTimer;
-        private const string TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fff";
-        private const long BytesPerMb = 1_048_576;
-        private const long MaxSupportedPages = 5_242_880;
-        private const long MaxSupportedPageSize = 4096;
-        private const long MaxSupportedDatabaseSize = unchecked(MaxSupportedPageSize * MaxSupportedPages) / 1048576;
-        private static SemaphoreSlim semaphoreSlim = new SemaphoreSlim(1, 1);
-        
-        public SQLiteSink(
-            string sqlLiteDbPath,
-            string tableName,
-            IFormatProvider formatProvider,
-            bool storeTimestampInUtc,
-            TimeSpan? retentionPeriod,
-            TimeSpan? retentionCheckInterval,
-            uint batchSize = 100,
-            uint maxDatabaseSize = 10,
-            bool rollOver = true) : base(batchSize: (int)batchSize, maxBufferSize: 100_000)
+        private const           string          TimestampFormat          = "yyyy-MM-ddTHH:mm:ss.fff";
+        private const           long            BytesPerMb               = 1_048_576;
+        private const           long            MaxSupportedPages        = 5_242_880;
+        private const           long            MaxSupportedPageSize     = 4096;
+        private const           long            MaxSupportedDatabaseSize = unchecked(MaxSupportedPageSize * MaxSupportedPages) / 1048576;
+        private readonly static SemaphoreSlim   semaphoreSlim            = new SemaphoreSlim(1, 1);
+        private readonly        string          _databasePath;
+        private readonly        IFormatProvider _formatProvider;
+        private readonly        uint            _maxDatabaseSize;
+        private readonly        TimeSpan?       _retentionPeriod;
+        private readonly        Timer           _retentionTimer;
+        private readonly        bool            _rollOver;
+        private readonly        bool            _storeTimestampInUtc;
+        private readonly        string          _tableName;
+
+        public SQLiteSink(string sqlLiteDbPath, string tableName, IFormatProvider formatProvider, bool storeTimestampInUtc,
+            TimeSpan? retentionPeriod, TimeSpan? retentionCheckInterval, uint batchSize = 100, uint maxDatabaseSize = 10,
+            bool rollOver = true) : base((int)batchSize, 100_000)
         {
-            _databasePath = sqlLiteDbPath;
-            _tableName = tableName;
-            _formatProvider = formatProvider;
+            _databasePath        = sqlLiteDbPath;
+            _tableName           = tableName;
+            _formatProvider      = formatProvider;
             _storeTimestampInUtc = storeTimestampInUtc;
-            _maxDatabaseSize = maxDatabaseSize;
-            _rollOver = rollOver;
+            _maxDatabaseSize     = maxDatabaseSize;
+            _rollOver            = rollOver;
 
             if (maxDatabaseSize > MaxSupportedDatabaseSize)
             {
@@ -73,23 +60,25 @@ namespace Serilog.Sinks.SQLite
             if (retentionPeriod.HasValue)
             {
                 // impose a min retention period of 15 minute
-                var retentionCheckMinutes = 15;
+                int retentionCheckMinutes = 15;
+
                 if (retentionCheckInterval.HasValue)
                 {
                     retentionCheckMinutes = Math.Max(retentionCheckMinutes, retentionCheckInterval.Value.Minutes);
                 }
 
                 // impose multiple of 15 minute interval
-                retentionCheckMinutes = (retentionCheckMinutes / 15) * 15;
+                retentionCheckMinutes = retentionCheckMinutes / 15 * 15;
 
-                _retentionPeriod = new[] { retentionPeriod, TimeSpan.FromMinutes(30) }.Max();
+                _retentionPeriod = new[] {retentionPeriod, TimeSpan.FromMinutes(30)}.Max();
 
                 // check for retention at this interval - or use retentionPeriod if not specified
                 _retentionTimer = new Timer(
-                    (x) => { ApplyRetentionPolicy(); },
+                    x => { ApplyRetentionPolicy(); },
                     null,
                     TimeSpan.FromMinutes(0),
-                    TimeSpan.FromMinutes(retentionCheckMinutes));
+                    TimeSpan.FromMinutes(retentionCheckMinutes)
+                );
             }
         }
 
@@ -104,7 +93,7 @@ namespace Serilog.Sinks.SQLite
 
         private void InitializeDatabase()
         {
-            using (var conn = GetSqLiteConnection())
+            using (SQLiteConnection conn = GetSqLiteConnection())
             {
                 CreateSqlTable(conn);
             }
@@ -112,17 +101,17 @@ namespace Serilog.Sinks.SQLite
 
         private SQLiteConnection GetSqLiteConnection()
         {
-            var sqlConString = new SQLiteConnectionStringBuilder
+            string sqlConString = new SQLiteConnectionStringBuilder
             {
-                DataSource = _databasePath,
-                JournalMode = SQLiteJournalModeEnum.Memory,
-                SyncMode = SynchronizationModes.Normal,
-                CacheSize = 500,
-                PageSize = (int)MaxSupportedPageSize,
+                DataSource   = _databasePath,
+                JournalMode  = SQLiteJournalModeEnum.Memory,
+                SyncMode     = SynchronizationModes.Normal,
+                CacheSize    = 500,
+                PageSize     = (int)MaxSupportedPageSize,
                 MaxPageCount = (int)(_maxDatabaseSize * BytesPerMb / MaxSupportedPageSize)
             }.ConnectionString;
 
-            var sqLiteConnection = new SQLiteConnection(sqlConString);
+            SQLiteConnection sqLiteConnection = new SQLiteConnection(sqlConString);
             sqLiteConnection.Open();
 
             return sqLiteConnection;
@@ -130,47 +119,53 @@ namespace Serilog.Sinks.SQLite
 
         private void CreateSqlTable(SQLiteConnection sqlConnection)
         {
-            var colDefs = "id INTEGER PRIMARY KEY AUTOINCREMENT,";
+            string colDefs = "id INTEGER PRIMARY KEY AUTOINCREMENT,";
             colDefs += "Timestamp TEXT,";
             colDefs += "Level VARCHAR(10),";
             colDefs += "Exception TEXT,";
             colDefs += "RenderedMessage TEXT,";
             colDefs += "Properties TEXT";
 
-            var sqlCreateText = $"CREATE TABLE IF NOT EXISTS {_tableName} ({colDefs})";
+            string sqlCreateText = $"CREATE TABLE IF NOT EXISTS {_tableName} ({colDefs})";
 
-            var sqlCommand = new SQLiteCommand(sqlCreateText, sqlConnection);
+            SQLiteCommand sqlCommand = new SQLiteCommand(sqlCreateText, sqlConnection);
             sqlCommand.ExecuteNonQuery();
         }
 
         private SQLiteCommand CreateSqlInsertCommand(SQLiteConnection connection)
         {
-            var sqlInsertText = "INSERT INTO {0} (Timestamp, Level, Exception, RenderedMessage, Properties)";
+            string sqlInsertText = "INSERT INTO {0} (Timestamp, Level, Exception, RenderedMessage, Properties)";
             sqlInsertText += " VALUES (@timeStamp, @level, @exception, @renderedMessage, @properties)";
-            sqlInsertText = string.Format(sqlInsertText, _tableName);
+            sqlInsertText =  string.Format(sqlInsertText, _tableName);
 
-            var sqlCommand = connection.CreateCommand();
+            SQLiteCommand sqlCommand = connection.CreateCommand();
             sqlCommand.CommandText = sqlInsertText;
             sqlCommand.CommandType = CommandType.Text;
 
-            sqlCommand.Parameters.Add(new SQLiteParameter("@timeStamp", DbType.DateTime2));
-            sqlCommand.Parameters.Add(new SQLiteParameter("@level", DbType.String));
-            sqlCommand.Parameters.Add(new SQLiteParameter("@exception", DbType.String));
+            sqlCommand.Parameters.Add(new SQLiteParameter("@timeStamp",       DbType.DateTime2));
+            sqlCommand.Parameters.Add(new SQLiteParameter("@level",           DbType.String));
+            sqlCommand.Parameters.Add(new SQLiteParameter("@exception",       DbType.String));
             sqlCommand.Parameters.Add(new SQLiteParameter("@renderedMessage", DbType.String));
-            sqlCommand.Parameters.Add(new SQLiteParameter("@properties", DbType.String));
+            sqlCommand.Parameters.Add(new SQLiteParameter("@properties",      DbType.String));
 
             return sqlCommand;
         }
 
         private void ApplyRetentionPolicy()
         {
-            var epoch = DateTimeOffset.Now.Subtract(_retentionPeriod.Value);
-            using (var sqlConnection = GetSqLiteConnection())
+            if (_retentionPeriod == null)
             {
-                using (var cmd = CreateSqlDeleteCommand(sqlConnection, epoch))
+                throw new ArgumentNullException(nameof(_retentionPeriod.Value));
+            }
+
+            DateTimeOffset epoch = DateTimeOffset.Now.Subtract(_retentionPeriod.Value);
+
+            using (SQLiteConnection sqlConnection = GetSqLiteConnection())
+            {
+                using (SQLiteCommand cmd = CreateSqlDeleteCommand(sqlConnection, epoch))
                 {
                     SelfLog.WriteLine("Deleting log entries older than {0}", epoch);
-                    var ret = cmd.ExecuteNonQuery();
+                    int ret = cmd.ExecuteNonQuery();
                     SelfLog.WriteLine($"{ret} records deleted");
                 }
             }
@@ -178,7 +173,7 @@ namespace Serilog.Sinks.SQLite
 
         private void TruncateLog(SQLiteConnection sqlConnection)
         {
-            var cmd = sqlConnection.CreateCommand();
+            SQLiteCommand cmd = sqlConnection.CreateCommand();
             cmd.CommandText = $"DELETE FROM {_tableName}";
             cmd.ExecuteNonQuery();
 
@@ -187,37 +182,45 @@ namespace Serilog.Sinks.SQLite
 
         private void VacuumDatabase(SQLiteConnection sqlConnection)
         {
-            var cmd = sqlConnection.CreateCommand();
-            cmd.CommandText = $"vacuum";
+            SQLiteCommand cmd = sqlConnection.CreateCommand();
+            cmd.CommandText = "vacuum";
             cmd.ExecuteNonQuery();
         }
 
         private SQLiteCommand CreateSqlDeleteCommand(SQLiteConnection sqlConnection, DateTimeOffset epoch)
         {
-            var cmd = sqlConnection.CreateCommand();
+            SQLiteCommand cmd = sqlConnection.CreateCommand();
             cmd.CommandText = $"DELETE FROM {_tableName} WHERE Timestamp < @epoch";
+
             cmd.Parameters.Add(
                 new SQLiteParameter("@epoch", DbType.DateTime2)
                 {
-                    Value = (_storeTimestampInUtc ? epoch.ToUniversalTime() : epoch).ToString(
-                        TimestampFormat)
-                });
+                    Value = (_storeTimestampInUtc
+                        ? epoch.ToUniversalTime()
+                        : epoch).ToString(TimestampFormat)
+                }
+            );
 
             return cmd;
         }
 
         protected override async Task<bool> WriteLogEventAsync(ICollection<LogEvent> logEventsBatch)
         {
-            if ((logEventsBatch == null) || (logEventsBatch.Count == 0))
+            if (logEventsBatch == null || logEventsBatch.Count == 0)
+            {
                 return true;
+            }
+
             await semaphoreSlim.WaitAsync().ConfigureAwait(false);
+
             try
             {
-                using (var sqlConnection = GetSqLiteConnection())
+                using (SQLiteConnection sqlConnection = GetSqLiteConnection())
                 {
                     try
                     {
                         await WriteToDatabaseAsync(logEventsBatch, sqlConnection).ConfigureAwait(false);
+
                         return true;
                     }
                     catch (SQLiteException e)
@@ -225,7 +228,9 @@ namespace Serilog.Sinks.SQLite
                         SelfLog.WriteLine(e.Message);
 
                         if (e.ResultCode != SQLiteErrorCode.Full)
+                        {
                             return false;
+                        }
 
                         if (_rollOver == false)
                         {
@@ -234,22 +239,26 @@ namespace Serilog.Sinks.SQLite
                             return true;
                         }
 
-                        var dbExtension = Path.GetExtension(_databasePath);
+                        string dbExtension = Path.GetExtension(_databasePath);
 
-                        var newFilePath = Path.Combine(Path.GetDirectoryName(_databasePath) ?? "Logs",
-                            $"{Path.GetFileNameWithoutExtension(_databasePath)}-{DateTime.Now:yyyyMMdd_HHmmss.ff}{dbExtension}");
-                         
-                        File.Copy(_databasePath, newFilePath, true);
+                        string newFilePath = Path.Combine(
+                            Path.GetDirectoryName(_databasePath) ?? "Logs",
+                            $"{Path.GetFileNameWithoutExtension(_databasePath)}-{DateTime.Now:yyyyMMdd_HHmmss.ff}{dbExtension}"
+                        );
+
+                        File.Copy(_databasePath ?? throw new InvalidOperationException(), newFilePath, true);
 
                         TruncateLog(sqlConnection);
                         await WriteToDatabaseAsync(logEventsBatch, sqlConnection).ConfigureAwait(false);
 
                         SelfLog.WriteLine($"Rolling database to {newFilePath}");
+
                         return true;
                     }
                     catch (Exception e)
                     {
                         SelfLog.WriteLine(e.Message);
+
                         return false;
                     }
                 }
@@ -262,21 +271,22 @@ namespace Serilog.Sinks.SQLite
 
         private async Task WriteToDatabaseAsync(ICollection<LogEvent> logEventsBatch, SQLiteConnection sqlConnection)
         {
-            using (var tr = sqlConnection.BeginTransaction())
+            using (SQLiteTransaction tr = sqlConnection.BeginTransaction())
             {
-                using (var sqlCommand = CreateSqlInsertCommand(sqlConnection))
+                using (SQLiteCommand sqlCommand = CreateSqlInsertCommand(sqlConnection))
                 {
                     sqlCommand.Transaction = tr;
 
-                    foreach (var logEvent in logEventsBatch)
+                    foreach (LogEvent logEvent in logEventsBatch)
                     {
                         sqlCommand.Parameters["@timeStamp"].Value = _storeTimestampInUtc
                             ? logEvent.Timestamp.ToUniversalTime().ToString(TimestampFormat)
                             : logEvent.Timestamp.ToString(TimestampFormat);
-                        sqlCommand.Parameters["@level"].Value = logEvent.Level.ToString();
-                        sqlCommand.Parameters["@exception"].Value =
-                            logEvent.Exception?.ToString() ?? string.Empty;
-                        sqlCommand.Parameters["@renderedMessage"].Value = logEvent.MessageTemplate.Render(logEvent.Properties, _formatProvider);
+                        sqlCommand.Parameters["@level"].Value     = logEvent.Level.ToString();
+                        sqlCommand.Parameters["@exception"].Value = logEvent.Exception?.ToString() ?? string.Empty;
+
+                        sqlCommand.Parameters["@renderedMessage"].Value =
+                            logEvent.MessageTemplate.Render(logEvent.Properties, _formatProvider);
 
                         sqlCommand.Parameters["@properties"].Value = logEvent.Properties.Count > 0
                             ? logEvent.Properties.Json()
@@ -284,6 +294,7 @@ namespace Serilog.Sinks.SQLite
 
                         await sqlCommand.ExecuteNonQueryAsync().ConfigureAwait(false);
                     }
+
                     tr.Commit();
                 }
             }
